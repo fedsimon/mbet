@@ -1,4 +1,5 @@
-%INITIALIZE
+format longG
+%% INITIALIZE
 spot_price  = 23;
 strike_p    = 23;
 rate        = .01;
@@ -17,7 +18,7 @@ bin_names= ...
    {['Original Price -5% or more'], ['Original Price -2% to -5%'], ...
     ['Original Price -1% to -2%' ], ['Original Price -0% to -1%'], ...
     ['Original Price +0% to 1%'  ], ['Original Price +1% to 2%' ], ...
-    ['Original Price +2% to 5%'  ], ['Original Price +5% or more']}
+    ['Original Price +2% to 5%'  ], ['Original Price +5% or more']};
    
 fix     = 0;%change this value from zero to use a fixed total
 total   = 100000;
@@ -31,32 +32,72 @@ else
     wagers=randi(max_bet,1,size(histo_dist,2));
     wagers=total*wagers/sum(wagers);
 end
+figure();
+barh(wagers); 
+title('Wagers per Bin');
+set(gca,'YTickLabel',bin_names);
 
-%initial option value
-spot_price = strike_p;
-[call_0,put_0]=blsprice(spot_price,strike_p,rate,time,vol,yield) 
-%                           ^This 
-%assumes that all options are on-the-money which is clearly pretty silly
-%The parameters for this are give in the excel simulation and we would
-%definitely want to try playing with these parameters.  Maybe a normally
-%distributed strike price makes more sense but I'm not sure.
+%% SELECT THE WINNING BIN
+aPermuation = randperm(length(bin_names));      %PERMUTE RANGE(1,8)
+winningBin  = aPermuation(1);                   %SELECT FIRST OF PERMUTATION
+bin_names(winningBin)                           %PRINT WINNING BET
+newSpot     = spot_price*(1+retrn(winningBin));
+betsOutflow = wagers(winningBin)*adjodds(winningBin);
+betsInflow  = sum(wagers(1:end ~= winningBin));
+rawnet = betsInflow - betsOutflow;
 
-%Event: This is a uniformly distributed draw, but this should be correlated to the histo_dist% 
-k=randi(size(new_price,2));
-bin_names(k)
-u_prof=sum(wagers)-adjodds(k)*wagers(k);
+figure(); 
+bar([betsOutflow betsInflow rawnet]);
+title({'Bet Only Cash Flow'});
+set(gca,'XTickLabel',{'BetsOutflow', 'BetsInflow', 'Net'})
 
-%option value after event 
-[call,put]=blsprice(new_price(k),strike_p,rate,time,vol,yield)
+%% ANALYSIS FOR OPTION STRATEGY
+lossperbin = wagers.*adjodds;
 
-x=100*linspace(0,50,51);  % Number of options in bins of 100
+figure();
+barh(lossperbin);
+title({'Potential Loss Per Bin (without options)'});
+set(gca,'YTickLabel',bin_names);
 
-%%% Call Profits %%%
-c_prof=x*(call-call_0)-1.25*x/100; %Assumes $1.25 per contract (100 options)
+lossIfBear = sum(lossperbin(1:end/2));
+lossIfBull = sum(lossperbin(end/2:end));
+maxloss    = max(lossIfBear,lossIfBull);
 
-%%% Put Profits %%%
-p_prof=x*(put-put_0)-1.25*x/100;
+%% CALCULATE BUY PRICES
+[call_buyprice,put_buyprice]=blsprice(spot_price,strike_p,rate,time,vol,yield);
 
-%%% Total Profits %%%
-tot_prof=u_prof+c_prof+p_prof %This is a 1x51 vector with each column coreesponting to the same number of calls and puts.
-%Obviously this might not be optimal so the next level of complexity would be to go to two dimensions
+%CALCULATE NUMBER OF OPTIONS
+%FOR HEDGING, YOU NEED 1 OPTION FOR EVERY UNDERLYING. IN THIS CASE WE NEED
+%1 OPTION FOR EVERY 
+% MAX( (bearMoveOdds_v*bearWagers_v), (bullMoveOdds.*bullWagers_v) )
+maxbearloss = max(lossperbin(1:end/2))
+maxbullloss = max(lossperbin(end/2:end))
+maxnumopts  = max(maxbearloss,maxbullloss)/100;
+    
+%% BUY OPTIONS (STRADDLE)
+%BUY CALLS (CALL=BEAR)
+%numCalls        = maxbearloss/100
+numCalls         = maxnumopts;      %LESS DEPENDENT ON PROPRIETARY PROBABILITIES THAN ABOVE
+callExpenditure = numCalls * call_buyprice; 
+%BUY PUTS (PUT=BULL)
+%numPuts         = maxbullloss/100
+numPuts         = maxnumopts;       %LESS DEPENDENT ON PROPRIETARY PROBABILITIES THAN ABOVE
+putExpenditure  = numPuts * put_buyprice;
+
+%% SELL OPTIONS
+[call_sellprice,put_sellprice]=blsprice(newSpot,strike_p,rate,time,vol,yield);
+%SELL CALLS
+callRevenue     = numCalls * call_sellprice;
+%SELL PUTS
+putRevenue      = numPuts * put_sellprice;
+
+%OPTION PROFIT
+optionExpenditure = callExpenditure + putExpenditure;
+optionRevenue     = callRevenue + putRevenue;
+optionProfit      = optionRevenue - optionExpenditure;
+
+%%
+totalProfit = betsInflow + optionRevenue - betsOutflow - optionExpenditure;
+figure;bar([betsInflow, optionRevenue, betsOutflow, optionExpenditure, totalProfit])
+title('Cash Flow Distribution');
+set(gca,'XTickLabel',{'BetsInflow', 'OptionRevenue', 'BetsOutflow', 'OptionExpenditure', 'Net'})
